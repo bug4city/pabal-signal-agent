@@ -20,7 +20,9 @@ const REGISTRY_ABI = [
   "function nextAgentId() view returns (uint256)",
   "function agents(uint256) view returns (address owner, string metadataURI, bytes32 manifestHash, uint8 agentType, bool active, uint64 version, uint64 registeredAt)",
   "function registerAgent(string,bytes32,uint8) returns (uint256)",
+  "function updateAgent(uint256 agentId, string metadataURI, bytes32 manifestHash)",
   "event AgentRegistered(uint256 indexed agentId,address indexed owner,uint8 agentType,bytes32 manifestHash,string metadataURI)",
+  "event AgentUpdated(uint256 indexed agentId, bytes32 manifestHash)",
 ];
 const HUB_ABI = [
   "function setPricing(uint256 agentId,uint128 subPricePerPeriod,uint128 taskPrice)",
@@ -56,6 +58,7 @@ function buildManifest(agentId) {
   return {
     agentId,
     name: "BUG BTC/ETH Disciplined Signal",
+    description: "Live BTC/ETH BUY/SELL signals from BUG's RSI+VWMA Disciplined strategy (1H/2H/4H/1D) with daily SMA200 market regime. HTTP/JSON — no Telegram, no wallet permissions required.",
     type: "T1-signal",
     category: "signal",
     onchainType: 0,
@@ -76,6 +79,7 @@ function buildManifest(agentId) {
     display: {
       symbols: ["BTCUSDT", "ETHUSDT"],
       timeframe: "1H · 2H · 4H · 1D",
+      connect: "http",
     },
     riskNotice: "This agent only provides information (signals) and is not investment advice or discretionary management. Past performance does not guarantee future returns.",
   };
@@ -171,6 +175,38 @@ async function api(p, body) {
     console.log("broker accepted:", JSON.stringify(res, null, 2));
     state.brokerRegistered = true;
     saveState();
+    return;
+  }
+
+  // updateManifest: manifest.json의 새 해시를 온체인에 반영 + 브로커에 재제출
+  if (cmd === "update") {
+    if (!state.agentId) throw new Error("agentId not in state, run status first");
+    const manifestRaw = fs.readFileSync(MANIFEST_FILE, "utf8");
+    const newHash = ethers.keccak256(ethers.toUtf8Bytes(manifestRaw));
+    console.log("new manifest hash:", newHash);
+    const onchain = await registry.agents(state.agentId);
+    if (onchain.manifestHash.toLowerCase() === newHash.toLowerCase()) {
+      console.log("on-chain hash already matches, skipping updateManifest tx");
+    } else {
+      const onchainAgent = await registry.agents(state.agentId);
+      const metadataURI = onchainAgent.metadataURI || ENDPOINT;
+      const tx = await registry.updateAgent(state.agentId, metadataURI, newHash);
+      console.log("updateAgent tx sent:", tx.hash);
+      await tx.wait();
+      console.log("updateAgent confirmed");
+    }
+    // EIP-712 AgentRegistration으로 브로커에 재제출
+    state.manifestHash = newHash;
+    const deadline = Math.floor(Date.now() / 1000) + 300;
+    const domain = { name: "BOBOO Agent Registration", version: "1", chainId, verifyingContract: C.AgentRegistry };
+    const signature = await wallet.signTypedData(domain, AGENT_REGISTRATION_TYPES, {
+      agentId: state.agentId, manifestHash: newHash, deadline,
+    });
+    const res = await api("/agents", { manifestRaw, signature, deadline });
+    console.log("broker resubmit:", JSON.stringify(res, null, 2));
+    state.brokerRegistered = true;
+    saveState();
+    console.log("done: on-chain + broker both updated");
     return;
   }
 
