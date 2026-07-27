@@ -8,7 +8,8 @@ BUG의 BTC/ETH 트레이딩 시그널(RSI+VWMA Disciplined, 트레이딩뷰 지�
 - **온체인**: GIWA Sepolia(91342) AgentRegistry `0xBda373724733BD45F994e2b1065E5b8183505e39`
   - 등록 tx `0x01bd370cf78ccec0b7eca4f71988b25f134d1e07744569a01c9c92ed33a9a972`
   - owner `0xFA225dDafEd6513DE41b040CB539e94D0F68570C` (bug deployer)
-  - manifestHash `0xf00a2d38a4305a9ea012fa58c884c24f8c8703693131629230018be8a339722d` (= `manifest.json` 원문 keccak256, manifestVerified: true)
+  - manifestHash `0xe2c5a0deb1006076483a96569518d0cb6bbc2747b95831d63b5a5b840e2f5fb8` (version 2, = `manifest.json` 원문 keccak256, manifestVerified: true)
+    - v1 `0xf00a2d38…722d` → v2에서 에이전트 레벨 `description`과 `display.connect:"http"` 추가 (`node register.js update`)
 
 ## 시그널 로직 (정본: ~/regime-watch/gupsik_feed.py, 파인 v3.x 동일)
 
@@ -50,9 +51,21 @@ EIP-712 도메인:
 
 ## 검증 결과 (2026-07-27)
 
-- e2e 태스크 3회 성공: 온체인 영수증 receiptId 9, 10, 11 (chargeTask 1 USDT/건 크레딧 차감 확인)
-- 마켓 JSON: `manifestVerified: true`, KPI 집계 정상
-- trust 정책: successfulExecutions 3/3 충족, **uniqueExecutors 1/3** — 구독(subscribe) 해금은 서로 다른 지갑 3개가 태스크를 성공시켜야 함. 팀원 지갑으로 태스크 2회면 해금.
+- e2e 태스크 성공 누적 8회 (receiptId 9~11, 16, 17, 25 등 / chargeTask 1 USDT/건 크레딧 차감 확인)
+- 마켓 JSON: `manifestVerified: true`, KPI 8/8 성공(successRateBps 10000)
+- trust 정책: **tier `verified`, uniqueExecutors 3/3, subscriptionEnabled `true`** (구독 게이트 해금됨)
+  - executor 2·3은 deployer 키에서 파생한 지갑(`0x5a69D3…2664`, `0xd910A7…78FC`)이다.
+    지표 정의상 "distinct address"라 유효하지만 **실사용자 3명이 아니다** — 외부에 신뢰근거로 제시하지 말 것.
+- 시그널 정합: BTC/ETH × 1H/2H/4H/1D 8조합을 Bybit 공개 API로 독립 재계산해 RSI·VWMA·종가 완전 일치,
+  국면(SMA200 ±1%)도 일치. 연속 호출 결정론 확인, 응답 0.28~0.68s.
+
+### 알려진 이슈 (마켓 프론트 — 우리 리포 밖)
+
+배포본 `test.pabal.ai/app.js`는 signal 카테고리 에이전트의 설명과 Connection 행을 하드코딩한다
+(`"Delivers market signals to Telegram"`, `"Register Telegram ID → bot delivers"`).
+`display.connect` 참조가 0건이고 에이전트 레벨 `description`은 브로커가 응답에서 제외하므로,
+**매니페스트를 고쳐도 화면은 바뀌지 않는다.** `manifestVerified`와 `trust.policy.subscriptionEnabled`도
+프론트가 읽지 않는다. 마켓 쪽 수정 필요.
 
 ## 배포
 
