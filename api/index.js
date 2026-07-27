@@ -13,6 +13,7 @@ const TIMEFRAMES = [
   ["1D", "D", 86400e3],
 ];
 const TF_ALIAS = { "1H": "1H", "60": "1H", "2H": "2H", "120": "2H", "4H": "4H", "240": "4H", "1D": "1D", D: "1D" };
+const SYMBOL_ALIAS = { BTC: "BTCUSDT", BTCUSDT: "BTCUSDT", XBT: "BTCUSDT", ETH: "ETHUSDT", ETHUSDT: "ETHUSDT" };
 const BAND = 0.01;
 const STRATEGY = "RSI(14) oversold(<=35) arm -> close reclaims VWMA(20) = BUY / RSI(14)>=65 above VWMA(20) = SELL (once per episode). Regime = daily close vs SMA200 +/-1% band.";
 
@@ -97,6 +98,7 @@ function dailyRegime(rows, nowMs) {
 
 // 마감봉 리플레이 — gupsik_feed.scan_symbol과 동일한 arm/발화 머신
 function replay(rows, tfMs, nowMs) {
+  // conf[i][0] = 봉 시작(open) 시각. 마감 시각 = 시작 + 봉길이.
   const conf = rows.filter((r) => r[0] + tfMs <= nowMs);
   const ts = conf.map((r) => r[0]), close = conf.map((r) => r[1]), vol = conf.map((r) => r[2]);
   const rsi = rsiSeries(close), vw = vwmaSeries(close, vol);
@@ -106,11 +108,11 @@ function replay(rows, tfMs, nowMs) {
     if (rsi[i] == null || vw[i] == null) continue;
     if (rsi[i] <= 35) rawArm = true;
     if (rawArm && close[i] > vw[i]) {
-      fired.push({ kind: "BUY", price: close[i], ts: ts[i] });
+      fired.push({ kind: "BUY", price: close[i], ts: ts[i], tfMs });
       rawArm = false;
     }
     if (rsi[i] >= 65 && close[i] > vw[i]) {
-      if (sellArm) { fired.push({ kind: "SELL", price: close[i], ts: ts[i] }); sellArm = false; }
+      if (sellArm) { fired.push({ kind: "SELL", price: close[i], ts: ts[i], tfMs }); sellArm = false; }
     } else if (rsi[i] < 65) {
       sellArm = true;
     }
@@ -123,22 +125,40 @@ function replay(rows, tfMs, nowMs) {
       close: close[i],
       rsi: rsi[i] != null ? Math.round(rsi[i] * 100) / 100 : null,
       vwma: vw[i] != null ? Math.round(vw[i] * 1e4) / 1e4 : null,
-      closedAt: new Date(ts[i]).toISOString(),
+      openAt: new Date(ts[i]).toISOString(),          // 기준봉 시작
+      closedAt: new Date(ts[i] + tfMs).toISOString(), // 기준봉 마감(= 이 값 이후의 데이터는 반영되지 않음)
       armed: { buy: rawArm, sell: sellArm },
     },
   };
 }
 
+// 잘못된 입력은 조용히 전체 반환하지 않고 명시적으로 거절한다(무음 폴백 금지).
+class BadRequest extends Error {
+  constructor(code, message, extra) { super(message); this.code = code; this.extra = extra || {}; }
+}
+
 function pickSymbols(params) {
-  const s = String(params.symbol || "").toUpperCase().replace(/USDT$/, "");
-  if (s === "BTC") return ["BTCUSDT"];
-  if (s === "ETH") return ["ETHUSDT"];
-  return SYMBOLS;
+  if (params.symbol == null || params.symbol === "") return SYMBOLS;
+  const raw = String(params.symbol).trim();
+  const sym = SYMBOL_ALIAS[raw.toUpperCase()];
+  if (!sym) throw new BadRequest("invalid_symbol", `unsupported symbol: ${raw}`, { got: raw, supported: ["BTC", "ETH"] });
+  return [sym];
 }
 
 function pickFrames(params) {
-  const tf = TF_ALIAS[String(params.timeframe || "").toUpperCase()];
-  return tf ? TIMEFRAMES.filter((t) => t[0] === tf) : TIMEFRAMES;
+  if (params.timeframe == null || params.timeframe === "") return TIMEFRAMES;
+  const raw = String(params.timeframe).trim();
+  const tf = TF_ALIAS[raw.toUpperCase()];
+  if (!tf) throw new BadRequest("invalid_timeframe", `unsupported timeframe: ${raw}`, { got: raw, supported: ["1H", "2H", "4H", "1D"] });
+  return TIMEFRAMES.filter((t) => t[0] === tf);
+}
+
+// limit: 정수만, 1~100 클램프. 숫자가 아니면 거절(조용히 기본값으로 넘어가지 않는다).
+function pickLimit(params) {
+  if (params.limit == null || params.limit === "") return 20;
+  const n = Number(params.limit);
+  if (!Number.isFinite(n)) throw new BadRequest("invalid_limit", `limit must be a number: ${params.limit}`, { got: params.limit, min: 1, max: 100 });
+  return Math.min(Math.max(Math.floor(n), 1), 100);
 }
 
 async function scanAll(params) {
@@ -147,18 +167,24 @@ async function scanAll(params) {
   const nowMs = Date.now();
   const out = {};
   await Promise.all(symbols.map(async (sym) => {
-    const [price, daily, frameRows] = await Promise.all([
+    // 일봉은 국면(SMA200) 계산과 1D 프레임이 함께 쓰므로 한 번만 받는다.
+    const dailyPromise = klines(sym, "D").then((r) => [r, null]).catch((e) => [null, e.message]);
+    const [price, [daily, dailyErr], frameRows] = await Promise.all([
       lastPrice(sym).catch(() => null),
-      klines(sym, "D").catch(() => null),
+      dailyPromise,
       Promise.all(frames.map(async ([label, interval, tfMs]) => {
+        if (interval === "D") {
+          const [rows, err] = await dailyPromise;
+          return [label, tfMs, rows, err];
+        }
         try {
-          const rows = interval === "D" && false ? null : await klines(sym, interval);
-          return [label, tfMs, rows, null];
+          return [label, tfMs, await klines(sym, interval), null];
         } catch (e) {
           return [label, tfMs, null, e.message];
         }
       })),
     ]);
+    void dailyErr;
     const regime = daily ? dailyRegime(daily, nowMs) : null;
     const entry = {
       price,
@@ -171,7 +197,12 @@ async function scanAll(params) {
       const last = fired.length ? fired[fired.length - 1] : null;
       entry.frames[label] = {
         ...snapshot,
-        lastSignal: last ? { kind: last.kind, price: last.price, at: new Date(last.ts).toISOString() } : null,
+        lastSignal: last ? {
+          kind: last.kind,
+          price: last.price,
+          openAt: new Date(last.ts).toISOString(),
+          at: new Date(last.ts + last.tfMs).toISOString(), // 발화 확정 시각 = 해당 봉 마감
+        } : null,
         _fired: fired,
       };
     }
@@ -195,23 +226,33 @@ async function actionLatest(params) {
 }
 
 async function actionHistory(params) {
-  const limit = Math.min(Math.max(Number(params.limit) || 20, 1), 100);
+  const limit = pickLimit(params);
   const data = await scanAll(params);
   const all = [];
   for (const [sym, entry] of Object.entries(data)) {
     for (const [label, f] of Object.entries(entry.frames)) {
       for (const s of f._fired || []) {
-        all.push({ symbol: sym, timeframe: label, kind: s.kind, price: s.price, at: new Date(s.ts).toISOString() });
+        all.push({
+          symbol: sym,
+          timeframe: label,
+          kind: s.kind,
+          price: s.price,
+          openAt: new Date(s.ts).toISOString(),
+          at: new Date(s.ts + s.tfMs).toISOString(), // 발화 확정 시각 = 해당 봉 마감
+        });
       }
     }
   }
   all.sort((a, b) => (a.at < b.at ? 1 : -1));
+  const signals = all.slice(0, limit);
   return {
     agent: "bug-btc-eth-disciplined-signal",
     strategy: STRATEGY,
     asOf: new Date().toISOString(),
-    count: Math.min(all.length, limit),
-    signals: all.slice(0, limit),
+    limit,
+    total: all.length,
+    count: signals.length,
+    signals,
     disclaimer: "Informational signals only. Not investment advice.",
   };
 }
@@ -232,13 +273,36 @@ module.exports = async (req, res) => {
       agent: "bug-btc-eth-disciplined-signal",
       description: "BUG's BTC/ETH trading signals (RSI+VWMA Disciplined) for the Pabal/BOBOO marketplace.",
       actions: Object.keys(ACTIONS),
+      params: {
+        symbol: ["BTC", "ETH", "(omit = both)"],
+        timeframe: ["1H", "2H", "4H", "1D", "(omit = all)"],
+        limit: "signal.history only, integer 1-100 (default 20)",
+      },
       strategy: STRATEGY,
+      disclaimer: "Informational signals only. Not investment advice.",
     });
   }
 
   if (req.method !== "POST") return res.status(405).json({ error: "method_not_allowed" });
 
-  const body = req.body || {};
+  // content-type이 json이 아니어서 문자열로 들어온 본문도 한 번 더 파싱해 준다.
+  let body = req.body || {};
+  if (typeof body === "string") {
+    const raw = body.trim();
+    if (!raw) body = {};
+    else {
+      try { body = JSON.parse(raw); } catch {
+        return res.status(400).json({
+          error: "invalid_json",
+          message: "request body must be valid JSON",
+          hint: 'send content-type: application/json with {"action":"signal.latest"}',
+        });
+      }
+    }
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return res.status(400).json({ error: "invalid_body", message: "request body must be a JSON object" });
+  }
   // 브로커 원격 호출 형태를 로그로 관측 (Vercel logs)
   try { console.log("inbound", req.url, JSON.stringify(body).slice(0, 1500)); } catch {}
 
@@ -254,6 +318,9 @@ module.exports = async (req, res) => {
     const result = await handler(request);
     return res.status(200).json(result);
   } catch (e) {
+    if (e instanceof BadRequest) {
+      return res.status(400).json({ error: e.code, message: e.message, ...e.extra });
+    }
     console.error("action_failed", action, e.message);
     return res.status(500).json({ error: "agent_failed", message: e.message });
   }
