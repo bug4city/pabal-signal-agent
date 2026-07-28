@@ -211,12 +211,28 @@ async function scanAll(params) {
   return out;
 }
 
+// 사람이 바로 읽는 한 줄 요약 — UI가 응답 JSON을 그대로 노출하므로 최상단에 둔다 (QA 7/28)
+function summarize(data) {
+  const lines = [];
+  for (const [sym, s] of Object.entries(data)) {
+    const parts = [];
+    for (const [tf, f] of Object.entries(s.frames)) {
+      const armed = f.armed?.buy ? "buy-armed" : f.armed?.sell ? "sell-armed" : "idle";
+      const last = f.lastSignal ? `last ${f.lastSignal.kind} @${f.lastSignal.price}` : "no signal yet";
+      parts.push(`${tf}: RSI ${f.rsi} · ${armed} · ${last}`);
+    }
+    lines.push(`${sym} $${s.price} (${s.regime} regime) — ${parts.join(" | ")}`);
+  }
+  return lines;
+}
+
 async function actionLatest(params) {
   const data = await scanAll(params);
   for (const sym of Object.keys(data)) {
     for (const f of Object.values(data[sym].frames)) delete f._fired;
   }
   return {
+    summary: summarize(data),
     agent: "bug-btc-eth-disciplined-signal",
     strategy: STRATEGY,
     asOf: new Date().toISOString(),
@@ -246,6 +262,7 @@ async function actionHistory(params) {
   all.sort((a, b) => (a.at < b.at ? 1 : -1));
   const signals = all.slice(0, limit);
   return {
+    summary: signals.slice(0, 5).map((s) => `${s.at.slice(0, 16)} ${s.symbol} ${s.timeframe} ${s.kind} @${s.price}`),
     agent: "bug-btc-eth-disciplined-signal",
     strategy: STRATEGY,
     asOf: new Date().toISOString(),
