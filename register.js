@@ -5,10 +5,22 @@
 // 사용: node register.js <validate|register|submit|pricing|task|status>
 // 키: ~/Desktop/giwa-workforce/contracts/.env 의 DEPLOYER_KEY (출력 금지)
 
-require("dotenv").config({ path: require("path").join(process.env.HOME, "Desktop", "giwa-workforce", "contracts", ".env") });
+// Key loading: local .env (PRIVATE_KEY=0x...) first, then legacy team path as fallback.
+// Judges: `cp .env.example .env` and put your own GIWA Sepolia key — never commit it.
+require("dotenv").config({ path: __dirname + "/.env" });
+if (!process.env.PRIVATE_KEY && !process.env.DEPLOYER_KEY) {
+  try {
+    require("dotenv").config({ path: require("path").join(process.env.HOME, "Desktop", "giwa-workforce", "contracts", ".env") });
+  } catch {}
+}
 const fs = require("fs");
 const path = require("path");
 const { ethers } = require("ethers");
+const SIGNER_KEY = process.env.PRIVATE_KEY || process.env.DEPLOYER_KEY;
+if (!SIGNER_KEY) {
+  console.error("No key found. Set PRIVATE_KEY=0x... in ./.env (see .env.example).");
+  process.exit(1);
+}
 
 const BROKER = "https://test.pabal.ai";
 const RPC = process.env.GIWA_RPC || "https://sepolia-rpc.giwa.io";
@@ -97,7 +109,7 @@ async function api(p, body) {
 (async () => {
   const cmd = process.argv[2] || "status";
   const provider = new ethers.JsonRpcProvider(RPC);
-  const wallet = new ethers.Wallet(process.env.DEPLOYER_KEY, provider);
+  const wallet = new ethers.Wallet(SIGNER_KEY, provider);
   const mp = await api("/marketplace");
   const C = mp.contracts;
   const chainId = mp.auth.chainId;
