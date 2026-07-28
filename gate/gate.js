@@ -185,6 +185,31 @@ async function sweep({ dryRun = false } = {}) {
   return report;
 }
 
+// 로컬에서 초대링크를 직접 발급한다 (엔드포인트 배포 없이 임의 채팅으로 게이트를 실증할 때 사용).
+// 이름에 지갑주소를 새기는 규칙은 엔드포인트와 동일 — 32자 절단분은 온체인에서 복원된다.
+async function invite(wallet, { ttlSec = 3600 } = {}) {
+  if (!ethers.isAddress(wallet)) throw new Error(`not an address: ${wallet}`);
+  const address = ethers.getAddress(wallet);
+  const expiresAt = Math.floor(Date.now() / 1000) + ttlSec;
+  const link = await telegram("createChatInviteLink", {
+    chat_id: CHANNEL_ID,
+    name: address,
+    member_limit: 1,
+    expire_date: expiresAt,
+  });
+  let expiry = 0;
+  try { expiry = await subExpiry(address); } catch {}
+  log("invited", address, link.invite_link);
+  return {
+    wallet: address,
+    inviteLink: link.invite_link,
+    linkName: link.name,
+    inviteExpiresAt: new Date(expiresAt * 1000).toISOString(),
+    subscribedUntil: expiry ? new Date(expiry * 1000).toISOString() : null,
+    subscriptionActive: expiry > Math.floor(Date.now() / 1000),
+  };
+}
+
 async function push(text) {
   const result = await telegram("sendMessage", { chat_id: CHANNEL_ID, text, disable_web_page_preview: true });
   log("pushed", `message_id=${result.message_id}`);
@@ -201,6 +226,22 @@ async function main() {
     const synced = await sync();
     const swept = await sweep();
     console.log(JSON.stringify({ synced, swept }, null, 2));
+  } else if (command === "invite") {
+    if (!args[0]) throw new Error("usage: gate.js invite <wallet>");
+    console.log(JSON.stringify(await invite(args[0]), null, 2));
+  } else if (command === "watch") {
+    // 입장 이벤트를 기다린다 (테스트용). 결합이 잡히면 즉시 종료.
+    const deadline = Date.now() + Number(args[0] || 300) * 1000;
+    process.stdout.write("waiting for a join event...\n");
+    while (Date.now() < deadline) {
+      const result = await sync();
+      if (result.bound > 0) {
+        console.log(JSON.stringify({ bound: result.bound, members: loadState().members }, null, 2));
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    console.log("no join captured before timeout");
   } else if (command === "push") {
     if (!args.length) throw new Error("usage: gate.js push <text>");
     await push(args.join(" "));
@@ -210,7 +251,8 @@ async function main() {
     const members = Object.entries(state.members).map(([id, m]) => ({ telegramId: id, ...m }));
     console.log(JSON.stringify({ channel: String(CHANNEL_ID), offset: state.offset, members }, null, 2));
   } else {
-    console.log("usage: gate.js <sync|sweep [--dry-run]|run|push <text>|status>");
+    console.log("usage: gate.js <invite <wallet>|watch [sec]|sync|sweep [--dry-run]|run|push <text>|status>");
+    console.log("       TELEGRAM_CHANNEL_ID=<chat_id> to target a different chat (test group)");
   }
 }
 
