@@ -274,9 +274,85 @@ async function actionHistory(params) {
   };
 }
 
+// ---------- 구독자 전용 텔레그램 채널 게이트 ----------
+// 구독(PaymentHub.subExpiry)이 살아있는 지갑에만 1회용 초대링크를 발급한다.
+// 지갑↔텔레그램 계정 결합은 "초대링크 이름에 지갑주소를 새겨" 입장 이벤트에서 회수한다.
+// (유저에게 텔레그램 ID를 입력받지 않는다 — 본인은 숫자 ID를 모르고, 입력값은 검증도 불가능하다.)
+const GIWA_RPC = "https://sepolia-rpc.giwa.io";
+const PAYMENT_HUB = "0x11940dd9637f25eC1c675A700E323e6e43a3fda9";
+const AGENT_ID = 9;
+const INVITE_TTL_SEC = 3600;
+
+async function subscriptionExpiry(user) {
+  const { ethers } = require("ethers");
+  const provider = new ethers.JsonRpcProvider(GIWA_RPC);
+  const hub = new ethers.Contract(
+    PAYMENT_HUB,
+    ["function subExpiry(uint256 agentId, address user) view returns (uint64)"],
+    provider,
+  );
+  return Number(await hub.subExpiry(AGENT_ID, user));
+}
+
+async function telegram(method, payload) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("channel_not_configured");
+  const r = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await r.json();
+  if (!body.ok) throw new Error(`telegram_${method}_failed: ${body.description || r.status}`);
+  return body.result;
+}
+
+async function actionChannel(request, ids) {
+  const { ethers } = require("ethers");
+  const user = ids.user;
+  if (!user || !ethers.isAddress(user)) {
+    throw new BadRequest("missing_user", "wallet address not found in request");
+  }
+  const channel = process.env.TELEGRAM_CHANNEL_ID;
+  if (!channel) throw new BadRequest("channel_not_configured", "signal channel is not configured");
+
+  // 엔드포인트는 공개다 — 브로커의 결제 게이트를 신뢰하지 않고 온체인을 직접 확인한다.
+  const expiry = await subscriptionExpiry(user);
+  const now = Math.floor(Date.now() / 1000);
+  if (expiry <= now) {
+    throw new BadRequest("subscription_required", "an active subscription is required for channel access", {
+      agentId: AGENT_ID,
+      user,
+      subscribedUntil: null,
+    });
+  }
+
+  const expiresAt = now + INVITE_TTL_SEC;
+  const invite = await telegram("createChatInviteLink", {
+    chat_id: channel,
+    name: user, // 입장 이벤트에서 이 이름으로 지갑을 되찾는다
+    member_limit: 1,
+    expire_date: expiresAt,
+  });
+
+  return {
+    summary: [
+      `Join the subscriber channel: ${invite.invite_link}`,
+      `This link works once, for you only, and expires ${new Date(expiresAt * 1000).toISOString()}.`,
+      `Your subscription runs until ${new Date(expiry * 1000).toISOString()}.`,
+      "When the subscription lapses, the channel membership is removed. Re-subscribing issues a new link.",
+    ],
+    inviteLink: invite.invite_link,
+    inviteExpiresAt: new Date(expiresAt * 1000).toISOString(),
+    subscribedUntil: new Date(expiry * 1000).toISOString(),
+    user,
+  };
+}
+
 const ACTIONS = {
   "signal.latest": actionLatest,
   "signal.history": actionHistory,
+  "signal.channel": actionChannel,
 };
 
 module.exports = async (req, res) => {
@@ -327,12 +403,19 @@ module.exports = async (req, res) => {
   const request = (body.request && typeof body.request === "object") ? body.request
     : (body.input && typeof body.input === "object") ? body.input
     : body;
+  const ctxObj = (body.ctx && typeof body.ctx === "object") ? body.ctx
+    : (body.context && typeof body.context === "object") ? body.context : {};
+  const pick = (...vals) => vals.find((v) => v !== undefined && v !== null && v !== "") ?? null;
+  const ids = {
+    agentId: pick(body.agentId, request.agentId, ctxObj.agentId),
+    user: pick(body.user, request.user, ctxObj.user, body.userAddress, request.userAddress),
+  };
   const action = request.action || body.action;
   const handler = ACTIONS[action];
   if (!handler) return res.status(400).json({ error: "unknown_action", got: action || null, actions: Object.keys(ACTIONS) });
 
   try {
-    const result = await handler(request);
+    const result = await handler(request, ids);
     return res.status(200).json(result);
   } catch (e) {
     if (e instanceof BadRequest) {
