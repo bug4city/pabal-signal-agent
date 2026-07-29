@@ -118,9 +118,17 @@ function replay(rows, tfMs, nowMs) {
     }
   }
   const i = conf.length - 1;
-  if (i < 0) return { fired, snapshot: null };
+  if (i < 0) return { fired, snapshot: null, series: [] };
+  // 차트용 최근 구간 — 지표는 이미 계산돼 있으므로 추가 비용 없이 잘라 쓴다.
+  const CHART_BARS = 120;
+  const from = Math.max(0, conf.length - CHART_BARS);
+  const series = [];
+  for (let k = from; k < conf.length; k++) {
+    series.push({ ts: ts[k], close: close[k], vwma: vw[k] ?? null, rsi: rsi[k] ?? null });
+  }
   return {
     fired,
+    series,
     snapshot: {
       close: close[i],
       rsi: rsi[i] != null ? Math.round(rsi[i] * 100) / 100 : null,
@@ -193,7 +201,7 @@ async function scanAll(params) {
     };
     for (const [label, tfMs, rows, err] of frameRows) {
       if (!rows) { entry.frames[label] = { error: err || "fetch_failed" }; continue; }
-      const { fired, snapshot } = replay(rows, tfMs, nowMs);
+      const { fired, snapshot, series } = replay(rows, tfMs, nowMs);
       const last = fired.length ? fired[fired.length - 1] : null;
       entry.frames[label] = {
         ...snapshot,
@@ -204,6 +212,7 @@ async function scanAll(params) {
           at: new Date(last.ts + last.tfMs).toISOString(), // 발화 확정 시각 = 해당 봉 마감
         } : null,
         _fired: fired,
+        _series: series,
       };
     }
     out[sym] = entry;
@@ -212,6 +221,68 @@ async function scanAll(params) {
 }
 
 // 사람이 바로 읽는 한 줄 요약 — UI가 응답 JSON을 그대로 노출하므로 최상단에 둔다 (QA 7/28)
+// 시그널이 "어디서" 터졌는지는 숫자보다 그림이 빠르다. 봉 데이터를 이미 리플레이했으므로
+// 외부 차트 서비스 없이 그 자리에서 그린다. 캔들이 아니라 종가선인 이유는 소스가 종가·거래량만
+// 주기 때문이다(고가/저가 없음) — 없는 값을 그리지 않는다.
+function renderChartSvg({ symbol, timeframe, series, fired, regime }) {
+  if (!Array.isArray(series) || series.length < 2) return null;
+  const W = 760, H = 430, PAD = { l: 8, r: 72, t: 40, b: 22 };
+  const priceH = 250, rsiTop = PAD.t + priceH + 26, rsiH = 84;
+  const xs = (i) => PAD.l + (i / (series.length - 1)) * (W - PAD.l - PAD.r);
+
+  const prices = series.flatMap((p) => [p.close, p.vwma]).filter((v) => Number.isFinite(v));
+  const lo = Math.min(...prices), hi = Math.max(...prices);
+  const span = hi - lo || 1;
+  const ys = (v) => PAD.t + priceH - ((v - lo) / span) * priceH;
+  const yr = (v) => rsiTop + rsiH - (Math.min(100, Math.max(0, v)) / 100) * rsiH;
+
+  const path = (key, mapY) => series
+    .map((p, i) => (Number.isFinite(p[key]) ? `${i && series[i - 1] && Number.isFinite(series[i - 1][key]) ? "L" : "M"}${xs(i).toFixed(1)},${mapY(p[key]).toFixed(1)}` : ""))
+    .join("");
+
+  const esc = (v) => String(v).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
+  const fmt = (v) => (v >= 1000 ? Math.round(v).toLocaleString("en-US") : Number(v).toFixed(2));
+  const firstTs = series[0].ts, lastTs = series[series.length - 1].ts;
+  const day = (ts) => new Date(ts).toISOString().slice(5, 10);
+
+  // 화면에 보이는 구간에서 발화한 시그널만 표시한다.
+  const marks = (fired || [])
+    .filter((f) => f.ts >= firstTs && f.ts <= lastTs)
+    .slice(-6)
+    .map((f) => {
+      const idx = series.findIndex((p) => p.ts === f.ts);
+      if (idx < 0) return "";
+      const x = xs(idx), y = ys(f.price), buy = f.kind === "BUY";
+      const color = buy ? "#00E6A1" : "#E65A5A";
+      const tri = buy ? `${x},${y - 16} ${x - 6},${y - 6} ${x + 6},${y - 6}` : `${x},${y + 16} ${x - 6},${y + 6} ${x + 6},${y + 6}`;
+      return `<polygon points="${tri}" fill="${color}"/><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="${color}"/>`;
+    }).join("");
+
+  const last = series[series.length - 1];
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="ui-monospace,SFMono-Regular,Menlo,monospace">
+<rect width="${W}" height="${H}" fill="#141414"/>
+<text x="8" y="22" fill="#F7F7F5" font-size="15" font-weight="700">${esc(symbol)} · ${esc(timeframe)}</text>
+<text x="${W - 8}" y="18" fill="#a3a39e" font-size="12" text-anchor="end">${esc(regime || "")} regime · RSI(14)+VWMA(20)</text>
+<text x="${W - 8}" y="33" fill="#87877f" font-size="11" text-anchor="end"><tspan fill="#00E6A1">▲ BUY</tspan>  <tspan fill="#E65A5A">▼ SELL</tspan>  <tspan fill="#E6C84F">— VWMA</tspan></text>
+<line x1="${PAD.l}" x2="${W - PAD.r}" y1="${PAD.t + priceH}" y2="${PAD.t + priceH}" stroke="#2a2a27"/>
+<path d="${path("vwma", ys)}" fill="none" stroke="#E6C84F" stroke-width="1.4" opacity="0.85"/>
+<path d="${path("close", ys)}" fill="none" stroke="#F7F7F5" stroke-width="1.8"/>
+${marks}
+<text x="${W - PAD.r + 6}" y="${ys(hi) + 4}" fill="#87877f" font-size="11">${fmt(hi)}</text>
+<text x="${W - PAD.r + 6}" y="${ys(lo) + 4}" fill="#87877f" font-size="11">${fmt(lo)}</text>
+<text x="${W - PAD.r + 6}" y="${ys(last.close) + 4}" fill="#F7F7F5" font-size="11" font-weight="700">${fmt(last.close)}</text>
+<text x="8" y="${rsiTop - 8}" fill="#87877f" font-size="11">RSI(14)</text>
+<line x1="${PAD.l}" x2="${W - PAD.r}" y1="${yr(65)}" y2="${yr(65)}" stroke="#E65A5A" stroke-dasharray="3 4" opacity="0.55"/>
+<line x1="${PAD.l}" x2="${W - PAD.r}" y1="${yr(35)}" y2="${yr(35)}" stroke="#00E6A1" stroke-dasharray="3 4" opacity="0.55"/>
+<path d="${path("rsi", yr)}" fill="none" stroke="#ff9a6d" stroke-width="1.5"/>
+<text x="${W - PAD.r + 6}" y="${yr(65) + 4}" fill="#E65A5A" font-size="10">65</text>
+<text x="${W - PAD.r + 6}" y="${yr(35) + 4}" fill="#00E6A1" font-size="10">35</text>
+<text x="${W - PAD.r + 6}" y="${yr(last.rsi ?? 50) + 4}" fill="#ff9a6d" font-size="11" font-weight="700">${last.rsi != null ? last.rsi.toFixed(1) : "-"}</text>
+<text x="8" y="${H - 6}" fill="#87877f" font-size="10">${day(firstTs)}</text>
+<text x="${W - PAD.r}" y="${H - 6}" fill="#87877f" font-size="10" text-anchor="end">${day(lastTs)}</text>
+</svg>`;
+}
+
 function summarize(data) {
   const lines = [];
   for (const [sym, s] of Object.entries(data)) {
@@ -228,11 +299,33 @@ function summarize(data) {
 
 async function actionLatest(params) {
   const data = await scanAll(params);
+  // 차트는 정확히 하나만 싣는다 — 8개 프레임을 전부 그리면 응답이 비대해진다.
+  // 요청에 심볼/프레임이 지정됐으면 그것을, 아니면 헤드라인(BTC 4H)을 그린다.
+  const chartSymbol = data.BTCUSDT ? "BTCUSDT" : Object.keys(data)[0];
+  const symEntry = data[chartSymbol];
+  const chartFrame = symEntry && (symEntry.frames["4H"] ? "4H" : Object.keys(symEntry.frames)[0]);
+  const target = chartFrame ? symEntry.frames[chartFrame] : null;
+  let chart = null;
+  if (target && Array.isArray(target._series)) {
+    const svg = renderChartSvg({
+      symbol: chartSymbol, timeframe: chartFrame, series: target._series,
+      fired: target._fired, regime: symEntry.regime,
+    });
+    if (svg) {
+      chart = {
+        symbol: chartSymbol,
+        timeframe: chartFrame,
+        format: "svg",
+        dataUri: `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`,
+      };
+    }
+  }
   for (const sym of Object.keys(data)) {
-    for (const f of Object.values(data[sym].frames)) delete f._fired;
+    for (const f of Object.values(data[sym].frames)) { delete f._fired; delete f._series; }
   }
   return {
     summary: summarize(data),
+    ...(chart ? { chart } : {}),
     agent: "bug-btc-eth-disciplined-signal",
     strategy: STRATEGY,
     asOf: new Date().toISOString(),

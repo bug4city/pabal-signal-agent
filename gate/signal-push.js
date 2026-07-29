@@ -45,14 +45,45 @@ function saveState(state) {
   fs.renameSync(tmp, STATE_FILE);
 }
 
-async function latest() {
+async function latest(params = {}) {
   const r = await fetch(ENDPOINT, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ action: "signal.latest" }),
+    body: JSON.stringify({ action: "signal.latest", ...params }),
   });
   if (!r.ok) throw new Error(`signal.latest http ${r.status}`);
   return r.json();
+}
+
+const CHROME = process.env.CHROME_BIN || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+
+// SVG -> PNG. 실패하면 null을 돌려주고 텍스트만 보낸다 (그림 때문에 시그널을 놓치지 않는다).
+function svgToPng(dataUri) {
+  const { execFileSync } = require("node:child_process");
+  const os2 = require("node:os");
+  const match = /^data:image\/svg\+xml;base64,([A-Za-z0-9+/=]+)$/.exec(dataUri || "");
+  if (!match) return null;
+  const dir = fs.mkdtempSync(path.join(os2.tmpdir(), "sigchart-"));
+  const svgPath = path.join(dir, "c.svg"), pngPath = path.join(dir, "c.png");
+  try {
+    fs.writeFileSync(svgPath, Buffer.from(match[1], "base64"));
+    execFileSync(CHROME, ["--headless", "--disable-gpu", "--hide-scrollbars",
+      `--screenshot=${pngPath}`, "--window-size=760,430", `file://${svgPath}`],
+      { stdio: "ignore", timeout: 45000 });
+    return fs.existsSync(pngPath) ? fs.readFileSync(pngPath) : null;
+  } catch { return null; }
+  finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} }
+}
+
+async function sendPhoto(png, caption) {
+  const form = new FormData();
+  form.append("chat_id", String(CHANNEL_ID));
+  form.append("caption", caption);
+  form.append("photo", new Blob([png], { type: "image/png" }), "chart.png");
+  const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, { method: "POST", body: form });
+  const body = await r.json();
+  if (!body.ok) throw new Error(`sendPhoto: ${body.description || r.status}`);
+  return body.result;
 }
 
 async function send(text) {
@@ -118,7 +149,13 @@ async function runOnce({ dryRun = false } = {}) {
     const text = compose(entry);
     if (dryRun) { sent.push({ ...entry, text }); continue; }
     try {
-      const result = await send(text);
+      let result = null;
+      try {
+        const framed = await latest({ symbol: entry.symbol.replace("USDT", ""), timeframe: entry.timeframe });
+        const png = svgToPng(framed?.chart?.dataUri);
+        if (png) result = await sendPhoto(png, text);
+      } catch (chartError) { log("chart_skipped", entry.stream, chartError.message); }
+      if (!result) result = await send(text);
       state.seen[entry.stream] = entry.key;   // 게시 성공에만 기록 — 실패는 다음 주기에 재시도
       saveState(state);
       sent.push({ stream: entry.stream, kind: entry.kind, messageId: result.message_id });
