@@ -48,3 +48,26 @@ State (bindings + update offset) lives in `~/.aimenem-gate/state.json`, mode 600
 manages access for invited members, but enforcing payment for *entry* requires making the channel
 private (removing the public username). Until then, treat the gate as subscription-driven
 membership management rather than a hard paywall.
+
+## Automatic signal push
+
+`signal-push.js` reads `signal.latest` on a schedule and posts **newly fired** BUY/SELL
+signals to the channel — that is what a subscription actually buys: signals arrive without
+anyone pressing a button.
+
+```bash
+node gate/signal-push.js dry-run   # show what would be posted, send nothing
+node gate/signal-push.js run       # post new signals
+node gate/tick.js                  # one scheduler tick: membership sweep + signal push
+```
+
+Invariants:
+1. A fired signal is posted once. The key is `symbol|timeframe|kind|candle-close`.
+2. The first run only records a baseline and sends nothing, so historical signals are never
+   dumped into the channel at once.
+3. State advances only after a successful send, so a failed post is retried next tick.
+4. Watched timeframes default to `2H,4H,1D` (`PUSH_TIMEFRAMES` to change). 1H is excluded by
+   default — it fires often enough to read as noise in a channel.
+
+`gate/com.bug.aimenem-gate.plist.example` is the macOS launchd job (10-minute interval) that
+runs `tick.js`.
