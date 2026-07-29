@@ -372,8 +372,8 @@ async function actionHistory(params) {
 // 지갑↔텔레그램 계정 결합은 "초대링크 이름에 지갑주소를 새겨" 입장 이벤트에서 회수한다.
 // (유저에게 텔레그램 ID를 입력받지 않는다 — 본인은 숫자 ID를 모르고, 입력값은 검증도 불가능하다.)
 const GIWA_RPC = "https://sepolia-rpc.giwa.io";
-const PAYMENT_HUB = "0x11940dd9637f25eC1c675A700E323e6e43a3fda9";
-const AGENT_ID = 9;
+const PAYMENT_HUB = "0xAe7E3DA7848079fc29566CcD905abBDAfE5F2a57";
+const AGENT_ID = 11;
 // 초대링크는 "그 구독자의 링크"다. 구독이 살아있는 동안 계속 유효해야 하고,
 // 구독이 끝나는 순간 링크도 같이 죽어야 한다 → 만료를 구독 만료에 맞춘다.
 const INVITE_MAX_TTL_SEC = 90 * 24 * 3600;

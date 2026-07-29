@@ -1,1 +1,50 @@
-{"agentId":9,"name":"BUG BTC/ETH Disciplined Signal","description":"트레이딩뷰 'Disciplined'(RSI+VWMA) 전략을 그대로 상품화한 BTC/ETH 시그널 에이전트. 1H·2H·4H·1D 종가 기준 BUY/SELL 시그널과 일봉 SMA200 국면을 제공합니다. 지갑 권한 불필요, 정보 제공 전용.","type":"T1-signal","category":"signal","onchainType":0,"endpoint":"https://pabal-signal-agent.vercel.app","actions":["signal.latest","signal.history","signal.channel"],"skills":[{"id":"default","name":"BTC/ETH Market Signal","description":"Live BTC/ETH BUY/SELL signals from BUG's RSI+VWMA Disciplined strategy (1H/2H/4H/1D) with daily SMA200 market regime.","actions":[{"name":"signal.latest","label":"최신 시그널 스냅샷","description":"가격·RSI·VWMA·시그널 대기 상태·국면을 심볼/프레임별로 요약합니다."},{"name":"signal.history","label":"최근 발화 시그널 이력","description":"리플레이 기반 최근 BUY/SELL 시그널 목록을 반환합니다."},{"name":"signal.channel","label":"구독자 채널 입장 링크","description":"구독 중인 지갑에만 1회용 텔레그램 채널 초대링크를 발급합니다. 구독이 만료되면 채널에서 자동 퇴장됩니다."}]}],"tokens":[],"maxUsdtPerTask":0,"maxTasksPerDay":0,"display":{"symbols":["BTCUSDT","ETHUSDT"],"timeframe":"1H · 2H · 4H · 1D","connect":"http","delivery":"Telegram subscriber channel (invite issued per wallet) + on-demand snapshot"},"riskNotice":"This agent only provides information (signals) and is not investment advice or discretionary management. Past performance does not guarantee future returns. Channel membership is tied to the on-chain subscription: when it lapses, the membership is removed."}
+{
+ "agentId": 11,
+ "name": "BUG BTC/ETH Disciplined Signal",
+ "description": "Live BTC/ETH BUY/SELL signals from BUG's RSI+VWMA Disciplined strategy (1H/2H/4H/1D) with daily SMA200 market regime. On-demand HTTP/JSON runs, plus a subscriber-only Telegram signal channel via personal invite link.",
+ "type": "T1-signal",
+ "category": "signal",
+ "onchainType": 0,
+ "endpoint": "https://pabal-signal-agent.vercel.app",
+ "actions": [
+  "signal.latest",
+  "signal.history",
+  "signal.channel"
+ ],
+ "skills": [
+  {
+   "id": "default",
+   "name": "BTC/ETH Market Signal",
+   "description": "Live BTC/ETH BUY/SELL signals from BUG's RSI+VWMA Disciplined strategy (1H/2H/4H/1D) with daily SMA200 market regime.",
+   "actions": [
+    {
+     "name": "signal.latest",
+     "label": "Get latest signal snapshot",
+     "description": "Current RSI/VWMA snapshot for every timeframe with the latest fired signal per frame, plus a rendered chart image."
+    },
+    {
+     "name": "signal.history",
+     "label": "Get recent fired signals",
+     "description": "List of recently fired BUY/SELL signals across BTC/ETH and all timeframes (most recent first)."
+    },
+    {
+     "name": "signal.channel",
+     "label": "Get my Telegram invite link",
+     "description": "Subscribers only — issues your personal invite link to the private Telegram signal channel. Valid while your subscription is active."
+    }
+   ]
+  }
+ ],
+ "tokens": [],
+ "maxUsdtPerTask": 0,
+ "maxTasksPerDay": 0,
+ "display": {
+  "symbols": [
+   "BTCUSDT",
+   "ETHUSDT"
+  ],
+  "timeframe": "1H · 2H · 4H · 1D",
+  "connect": "Subscribe → personal Telegram invite link"
+ },
+ "riskNotice": "This agent only provides information (signals) and is not investment advice or discretionary management. Past performance does not guarantee future returns."
+}

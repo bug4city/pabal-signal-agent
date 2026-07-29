@@ -19,8 +19,8 @@ const path = require("node:path");
 const { ethers } = require("ethers");
 
 const GIWA_RPC = process.env.GIWA_RPC || "https://sepolia-rpc.giwa.io";
-const PAYMENT_HUB = process.env.PAYMENT_HUB || "0x11940dd9637f25eC1c675A700E323e6e43a3fda9";
-const AGENT_ID = Number(process.env.AGENT_ID || 9);
+const PAYMENT_HUB = process.env.PAYMENT_HUB || "0xAe7E3DA7848079fc29566CcD905abBDAfE5F2a57";
+const AGENT_ID = Number(process.env.AGENT_ID || 11);
 const STATE_DIR = process.env.GATE_STATE_DIR || path.join(os.homedir(), ".aimenem-gate");
 const STATE_FILE = path.join(STATE_DIR, "state.json");
 const LOG_FILE = path.join(STATE_DIR, "gate.log");

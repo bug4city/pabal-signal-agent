@@ -70,12 +70,12 @@ function buildManifest(agentId) {
   return {
     agentId,
     name: "BUG BTC/ETH Disciplined Signal",
-    description: "Live BTC/ETH BUY/SELL signals from BUG's RSI+VWMA Disciplined strategy (1H/2H/4H/1D) with daily SMA200 market regime. HTTP/JSON — no Telegram, no wallet permissions required.",
+    description: "Live BTC/ETH BUY/SELL signals from BUG's RSI+VWMA Disciplined strategy (1H/2H/4H/1D) with daily SMA200 market regime. On-demand HTTP/JSON runs, plus a subscriber-only Telegram signal channel via personal invite link.",
     type: "T1-signal",
     category: "signal",
     onchainType: 0,
     endpoint: ENDPOINT,
-    actions: ["signal.latest", "signal.history"],
+    actions: ["signal.latest", "signal.history", "signal.channel"],
     skills: [{
       id: "default",
       name: "BTC/ETH Market Signal",
@@ -83,6 +83,7 @@ function buildManifest(agentId) {
       actions: [
         { name: "signal.latest", label: "Get latest signal snapshot" },
         { name: "signal.history", label: "Get recent fired signals" },
+        { name: "signal.channel", label: "Get my Telegram invite link" },
       ],
     }],
     tokens: [],
@@ -91,7 +92,7 @@ function buildManifest(agentId) {
     display: {
       symbols: ["BTCUSDT", "ETHUSDT"],
       timeframe: "1H · 2H · 4H · 1D",
-      connect: "http",
+      connect: "Subscribe → personal Telegram invite link",
     },
     riskNotice: "This agent only provides information (signals) and is not investment advice or discretionary management. Past performance does not guarantee future returns.",
   };
@@ -179,7 +180,7 @@ async function api(p, body) {
     if (!state.agentId || !state.manifestHash || !state.txHash) throw new Error("run register first");
     const manifestRaw = fs.readFileSync(MANIFEST_FILE, "utf8");
     const deadline = Math.floor(Date.now() / 1000) + 300;
-    const domain = { name: "BOBOO Agent Registration", version: "1", chainId, verifyingContract: C.AgentRegistry };
+    const domain = { name: "Pabal Agent Registration", version: "1", chainId, verifyingContract: C.AgentRegistry };
     const signature = await wallet.signTypedData(domain, AGENT_REGISTRATION_TYPES, {
       agentId: state.agentId, manifestHash: state.manifestHash, deadline,
     });
@@ -210,7 +211,7 @@ async function api(p, body) {
     // EIP-712 AgentRegistration으로 브로커에 재제출
     state.manifestHash = newHash;
     const deadline = Math.floor(Date.now() / 1000) + 300;
-    const domain = { name: "BOBOO Agent Registration", version: "1", chainId, verifyingContract: C.AgentRegistry };
+    const domain = { name: "Pabal Agent Registration", version: "1", chainId, verifyingContract: C.AgentRegistry };
     const signature = await wallet.signTypedData(domain, AGENT_REGISTRATION_TYPES, {
       agentId: state.agentId, manifestHash: newHash, deadline,
     });
