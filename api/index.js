@@ -374,7 +374,9 @@ async function actionHistory(params) {
 const GIWA_RPC = "https://sepolia-rpc.giwa.io";
 const PAYMENT_HUB = "0x11940dd9637f25eC1c675A700E323e6e43a3fda9";
 const AGENT_ID = 9;
-const INVITE_TTL_SEC = 3600;
+// 초대링크는 "그 구독자의 링크"다. 구독이 살아있는 동안 계속 유효해야 하고,
+// 구독이 끝나는 순간 링크도 같이 죽어야 한다 → 만료를 구독 만료에 맞춘다.
+const INVITE_MAX_TTL_SEC = 90 * 24 * 3600;
 
 async function subscriptionExpiry(user) {
   const { ethers } = require("ethers");
@@ -420,20 +422,20 @@ async function actionChannel(request, ids) {
     });
   }
 
-  const expiresAt = now + INVITE_TTL_SEC;
+  const expiresAt = Math.min(expiry, now + INVITE_MAX_TTL_SEC);
   const invite = await telegram("createChatInviteLink", {
     chat_id: channel,
     name: user, // 입장 이벤트에서 이 이름으로 지갑을 되찾는다
-    member_limit: 1,
+    member_limit: 1, // 계정 하나가 한 번 들어가면 끝 — 이미 멤버면 눌러도 채널이 열릴 뿐이다
     expire_date: expiresAt,
   });
 
   return {
     summary: [
       `Join the subscriber channel: ${invite.invite_link}`,
-      `This link works once, for you only, and expires ${new Date(expiresAt * 1000).toISOString()}.`,
+      `This is your personal link. It stays valid for the whole subscription, until ${new Date(expiresAt * 1000).toISOString()}.`,
       `Your subscription runs until ${new Date(expiry * 1000).toISOString()}.`,
-      "When the subscription lapses, the channel membership is removed. Re-subscribing issues a new link.",
+      "When the subscription lapses, the link stops working and the channel membership is removed. Re-subscribing issues a new link.",
     ],
     inviteLink: invite.invite_link,
     inviteExpiresAt: new Date(expiresAt * 1000).toISOString(),
